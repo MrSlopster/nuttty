@@ -82,6 +82,12 @@ server (`LIST CMD` + `GET CMDDESC`), so it always matches your hardware.
 Destructive commands (`load.off*`, `shutdown.*`, `driver.killpower`) are
 shown in red and ask for a `y`/`N` confirmation before being sent.
 
+Below the commands, the menu lists every variable the device reports as
+writable (`LIST RW`) — the battery cutoff, transfer window, shutdown
+delays, or whatever your hardware exposes. `Enter` edits the value in
+place; applying it requires a NUT user with `actions = SET` in
+`upsd.users`.
+
 ## License
 
 GPL-3.0-or-later — see [LICENSE](LICENSE).

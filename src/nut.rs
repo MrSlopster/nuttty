@@ -157,18 +157,28 @@ impl NutClient {
     pub fn list_vars(&mut self, ups: &str) -> Result<BTreeMap<String, String>> {
         let mut map = BTreeMap::new();
         for l in self.request_list("VAR", ups)? {
-            if let Some((name, val)) = parse_var_line(&l) {
+            if let Some((name, val)) = parse_tagged_line(&l, "VAR") {
                 map.insert(name, val);
             }
         }
         Ok(map)
     }
+
+    /// Names of the variables the device reports as writable (`LIST RW`).
+    pub fn list_rw(&mut self, ups: &str) -> Result<Vec<String>> {
+        Ok(self
+            .request_list("RW", ups)?
+            .iter()
+            .filter_map(|l| parse_tagged_line(l, "RW"))
+            .map(|(name, _)| name)
+            .collect())
+    }
 }
 
-/// Parse a `VAR <ups> <name> "<value>"` response line.
-fn parse_var_line(l: &str) -> Option<(String, String)> {
+/// Parse a `<TAG> <ups> <name> "<value>"` response line (TAG is VAR or RW).
+fn parse_tagged_line(l: &str, tag: &str) -> Option<(String, String)> {
     let mut it = l.splitn(4, ' ');
-    if it.next() != Some("VAR") {
+    if it.next() != Some(tag) {
         return None;
     }
     it.next(); // ups name
@@ -177,16 +187,9 @@ fn parse_var_line(l: &str) -> Option<(String, String)> {
     Some((name.to_string(), unquote(val)))
 }
 
-/// Run an instant command on its own short-lived authenticated connection,
-/// so the polling connection never carries auth state.
-pub fn instcmd(
-    host: &str,
-    port: u16,
-    ups: &str,
-    cmd: &str,
-    user: &str,
-    pass: &str,
-) -> Result<String> {
+/// Send one authenticated request on its own short-lived connection, so the
+/// polling connection never carries auth state.
+fn authed_line(host: &str, port: u16, user: &str, pass: &str, line: &str) -> Result<String> {
     let s = connect(host, port, Duration::from_secs(5))?;
     let mut r = BufReader::new(s);
     let mut send = |line: String| -> Result<String> {
@@ -203,7 +206,48 @@ pub fn instcmd(
     if !p.starts_with("OK") {
         bail!("PASSWORD: {p}");
     }
-    send(format!("INSTCMD {ups} {cmd}\n"))
+    send(line.to_string())
+}
+
+/// Run an instant command.
+pub fn instcmd(
+    host: &str,
+    port: u16,
+    ups: &str,
+    cmd: &str,
+    user: &str,
+    pass: &str,
+) -> Result<String> {
+    authed_line(host, port, user, pass, &format!("INSTCMD {ups} {cmd}\n"))
+}
+
+/// Set a read-write variable. Requires a NUT user with `actions = SET`.
+pub fn set_var(
+    host: &str,
+    port: u16,
+    ups: &str,
+    name: &str,
+    value: &str,
+    user: &str,
+    pass: &str,
+) -> Result<String> {
+    authed_line(host, port, user, pass, &set_var_line(ups, name, value))
+}
+
+/// Escape a value for the wire: the exact inverse of `unquote`.
+fn quote_value(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for c in v.chars() {
+        if c == '\\' || c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn set_var_line(ups: &str, name: &str, value: &str) -> String {
+    format!("SET VAR {ups} {name} \"{}\"\n", quote_value(value))
 }
 
 fn unquote(s: &str) -> String {
@@ -253,19 +297,45 @@ mod tests {
     #[test]
     fn var_line_parses() {
         assert_eq!(
-            parse_var_line(r#"VAR myups battery.charge "95""#),
+            parse_tagged_line(r#"VAR myups battery.charge "95""#, "VAR"),
             Some(("battery.charge".into(), "95".into()))
         );
         assert_eq!(
-            parse_var_line(r#"VAR myups ups.status "OL CHRG""#),
+            parse_tagged_line(r#"VAR myups ups.status "OL CHRG""#, "VAR"),
             Some(("ups.status".into(), "OL CHRG".into()))
         );
     }
 
     #[test]
+    fn rw_line_parses() {
+        assert_eq!(
+            parse_tagged_line(r#"RW myups input.transfer.low "160""#, "RW"),
+            Some(("input.transfer.low".into(), "160".into()))
+        );
+        // Tag mismatch: a VAR line is not an RW line.
+        assert_eq!(parse_tagged_line(r#"VAR myups x "1""#, "RW"), None);
+    }
+
+    #[test]
+    fn set_var_wire_format() {
+        assert_eq!(
+            set_var_line("myups", "input.transfer.low", "1.5"),
+            "SET VAR myups input.transfer.low \"1.5\"\n"
+        );
+        // Quotes and backslashes in the value must be escaped on the wire.
+        assert_eq!(
+            set_var_line("u", "n", r#"a"b\c"#),
+            "SET VAR u n \"a\\\"b\\\\c\"\n"
+        );
+        // quote_value is the exact inverse of unquote.
+        let tricky = r#"a"b\c \" end"#;
+        assert_eq!(unquote(&format!("\"{}\"", quote_value(tricky))), tricky);
+    }
+
+    #[test]
     fn var_line_rejects_malformed() {
-        assert_eq!(parse_var_line("CMD myups beeper.enable"), None);
-        assert_eq!(parse_var_line("VAR myups"), None);
-        assert_eq!(parse_var_line(""), None);
+        assert_eq!(parse_tagged_line("CMD myups beeper.enable", "VAR"), None);
+        assert_eq!(parse_tagged_line("VAR myups", "VAR"), None);
+        assert_eq!(parse_tagged_line("", "VAR"), None);
     }
 }

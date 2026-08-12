@@ -23,7 +23,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use app::{App, Mode, Update, WorkerCmd};
+use app::{App, MenuAction, Mode, Update, WorkerCmd};
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
     MouseButton, MouseEventKind,
@@ -284,12 +284,25 @@ fn worker(
         if tx.send(update).is_err() {
             return; // UI is gone
         }
-        // The supported command set is static per device: fetch it once,
-        // after the first successful poll proves the connection works.
+        // The supported command set and writable-variable list are static
+        // per device: fetch them once, after the first successful poll
+        // proves the connection works.
         if polled_ok && !cmds_sent {
             if let Ok(cmds) = client.list_cmds(&ups) {
                 cmds_sent = true;
                 if tx.send(Update::Cmds(cmds)).is_err() {
+                    return;
+                }
+                // Surface an RW-listing failure in the log rather than
+                // silently showing a menu with no settings section.
+                let rw_update = match client.list_rw(&ups) {
+                    Ok(rw) => Update::Rw(rw),
+                    Err(e) => Update::CmdResult {
+                        cmd: "LIST RW".into(),
+                        result: format!("ERR {e}"),
+                    },
+                };
+                if tx.send(rw_update).is_err() {
                     return;
                 }
             }
@@ -297,13 +310,29 @@ fn worker(
         // Pace polling on the command channel so a button press both runs
         // immediately and triggers a fresh poll right after.
         match rx.recv_timeout(interval) {
-            Ok(WorkerCmd::Inst(cmd)) => {
-                let result = match (&user, &pass) {
-                    (Some(u), Some(p)) => nut::instcmd(&host, port, &ups, &cmd, u, p)
-                        .unwrap_or_else(|e| format!("ERR {e}")),
-                    _ => "ERR no credentials — pass --user/--password or set NUTTTY_USER/NUTTTY_PASSWORD".into(),
+            Ok(work) => {
+                let (label, result) = match (&user, &pass) {
+                    (Some(u), Some(p)) => match &work {
+                        WorkerCmd::Inst(cmd) => (
+                            cmd.clone(),
+                            nut::instcmd(&host, port, &ups, cmd, u, p)
+                                .unwrap_or_else(|e| format!("ERR {e}")),
+                        ),
+                        WorkerCmd::Set { name, value } => (
+                            format!("SET {name}={value}"),
+                            nut::set_var(&host, port, &ups, name, value, u, p)
+                                .unwrap_or_else(|e| format!("ERR {e}")),
+                        ),
+                    },
+                    _ => {
+                        let label = match &work {
+                            WorkerCmd::Inst(cmd) => cmd.clone(),
+                            WorkerCmd::Set { name, value } => format!("SET {name}={value}"),
+                        };
+                        (label, "ERR no credentials — pass --user/--password or set NUTTTY_USER/NUTTTY_PASSWORD".into())
+                    }
                 };
-                if tx.send(Update::CmdResult { cmd, result }).is_err() {
+                if tx.send(Update::CmdResult { cmd: label, result }).is_err() {
                     return;
                 }
             }
@@ -370,8 +399,8 @@ fn run(
                         KeyCode::PageDown => app.menu_scroll(10),
                         KeyCode::Char('g') => app.menu_scroll(i64::MIN),
                         KeyCode::Char('G') => app.menu_scroll(i64::MAX),
-                        KeyCode::Enter | KeyCode::Char('l') => {
-                            if let Some(cmd) = app.selected_cmd() {
+                        KeyCode::Enter | KeyCode::Char('l') => match app.selected_action() {
+                            Some(MenuAction::Cmd(cmd)) => {
                                 if app::is_dangerous(&cmd) {
                                     app.mode = Mode::Confirm(cmd);
                                 } else {
@@ -379,7 +408,13 @@ fn run(
                                     app.mode = Mode::Normal;
                                 }
                             }
-                        }
+                            Some(MenuAction::Set(name)) => {
+                                // Prefill with the current value for editing.
+                                let buffer = app.vars.get(&name).cloned().unwrap_or_default();
+                                app.mode = Mode::SetVar { name, buffer };
+                            }
+                            None => {}
+                        },
                         _ => {}
                     },
                     Mode::Confirm(cmd) => match k.code {
@@ -392,6 +427,37 @@ fn run(
                         // to Normal, so a slip doesn't lose the user's place.
                         _ => app.mode = Mode::Menu,
                     },
+                    Mode::SetVar { name, buffer } => {
+                        let (name, mut buffer) = (name.clone(), buffer.clone());
+                        match k.code {
+                            KeyCode::Esc => app.mode = Mode::Menu,
+                            KeyCode::Enter => {
+                                if buffer.is_empty() {
+                                    app.note("empty value — Esc to cancel");
+                                } else {
+                                    app.note(format!("→ SET {name}={buffer}"));
+                                    let _ = cmd_tx.send(WorkerCmd::Set {
+                                        name,
+                                        value: buffer,
+                                    });
+                                    app.mode = Mode::Normal;
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                buffer.pop();
+                                app.mode = Mode::SetVar { name, buffer };
+                            }
+                            // No length cap: the prefilled server value may be
+                            // arbitrarily long, and the server validates anyway.
+                            KeyCode::Char(c)
+                                if c.is_ascii_digit() || (c == '.' && !buffer.contains('.')) =>
+                            {
+                                buffer.push(c);
+                                app.mode = Mode::SetVar { name, buffer };
+                            }
+                            _ => {}
+                        }
+                    }
                     Mode::Normal => match k.code {
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                         KeyCode::Char('?') => app.mode = Mode::Help,

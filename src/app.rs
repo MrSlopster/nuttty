@@ -13,6 +13,8 @@ pub enum Update {
     Vars(BTreeMap<String, String>),
     /// Instant commands the device supports: (name, description).
     Cmds(Vec<(String, String)>),
+    /// Names of variables the device reports as writable.
+    Rw(Vec<String>),
     Error(String),
     CmdResult {
         cmd: String,
@@ -22,6 +24,7 @@ pub enum Update {
 
 pub enum WorkerCmd {
     Inst(String),
+    Set { name: String, value: String },
 }
 
 /// Which overlay currently owns the keyboard.
@@ -31,6 +34,17 @@ pub enum Mode {
     Menu,
     /// Waiting for y/N on a destructive command.
     Confirm(String),
+    /// Editing a new value for a writable variable.
+    SetVar {
+        name: String,
+        buffer: String,
+    },
+}
+
+/// What the currently selected menu row does when activated.
+pub enum MenuAction {
+    Cmd(String),
+    Set(String),
 }
 
 /// Commands that can cut output power or shut things down get a
@@ -57,6 +71,8 @@ pub struct App {
     pub mode: Mode,
     /// Instant commands supported by the device: (name, description).
     pub cmds: Vec<(String, String)>,
+    /// Writable variable names; listed in the menu after the commands.
+    pub rw: Vec<String>,
     pub menu_state: ListState,
     /// Basic mode: only the summary panel, no charts or variable table.
     pub basic: bool,
@@ -80,6 +96,7 @@ impl App {
             buttons: Vec::new(),
             mode: Mode::Normal,
             cmds: Vec::new(),
+            rw: Vec::new(),
             menu_state: ListState::default(),
             basic: false,
         }
@@ -114,7 +131,13 @@ impl App {
             }
             Update::Cmds(c) => {
                 self.cmds = c;
-                if self.menu_state.selected().is_none() && !self.cmds.is_empty() {
+                if self.menu_state.selected().is_none() && self.menu_len() > 0 {
+                    self.menu_state.select(Some(0));
+                }
+            }
+            Update::Rw(r) => {
+                self.rw = r;
+                if self.menu_state.selected().is_none() && self.menu_len() > 0 {
                     self.menu_state.select(Some(0));
                 }
             }
@@ -175,8 +198,13 @@ impl App {
         self.table_state.select(Some(next));
     }
 
+    /// Menu rows: instant commands first, then writable variables.
+    pub fn menu_len(&self) -> usize {
+        self.cmds.len() + self.rw.len()
+    }
+
     pub fn menu_scroll(&mut self, delta: i64) {
-        let len = self.cmds.len();
+        let len = self.menu_len();
         if len == 0 {
             return;
         }
@@ -185,10 +213,14 @@ impl App {
         self.menu_state.select(Some(next));
     }
 
-    pub fn selected_cmd(&self) -> Option<String> {
-        self.cmds
-            .get(self.menu_state.selected()?)
-            .map(|(name, _)| name.clone())
+    pub fn selected_action(&self) -> Option<MenuAction> {
+        let i = self.menu_state.selected()?;
+        if let Some((name, _)) = self.cmds.get(i) {
+            return Some(MenuAction::Cmd(name.clone()));
+        }
+        self.rw
+            .get(i - self.cmds.len())
+            .map(|name| MenuAction::Set(name.clone()))
     }
 
     /// Charge slope in %/s from a least-squares fit over the last 5 minutes.
@@ -372,6 +404,28 @@ mod tests {
         assert_eq!(app.table_state.selected(), Some(0));
         app.scroll(-1); // already at top: stays clamped
         assert_eq!(app.table_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn menu_action_indexing() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.cmds = vec![
+            ("beeper.enable".into(), String::new()),
+            ("beeper.disable".into(), String::new()),
+        ];
+        app.rw = vec!["input.transfer.low".into()];
+        assert_eq!(app.menu_len(), 3);
+        app.menu_state.select(Some(1));
+        assert!(matches!(app.selected_action(), Some(MenuAction::Cmd(c)) if c == "beeper.disable"));
+        app.menu_state.select(Some(2));
+        assert!(
+            matches!(app.selected_action(), Some(MenuAction::Set(n)) if n == "input.transfer.low")
+        );
+        app.menu_state.select(Some(3));
+        assert!(app.selected_action().is_none());
+        // menu_scroll must clamp within the combined command+rw range.
+        app.menu_scroll(i64::MAX);
+        assert_eq!(app.menu_state.selected(), Some(2));
     }
 
     #[test]

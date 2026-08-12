@@ -62,6 +62,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if let Mode::Confirm(cmd) = &app.mode {
         let cmd = cmd.clone();
         draw_confirm_popup(f, &cmd);
+    } else if let Mode::SetVar { name, buffer } = &app.mode {
+        let (name, buffer) = (name.clone(), buffer.clone());
+        draw_setvar_popup(f, app, &name, &buffer);
     }
 }
 
@@ -84,7 +87,7 @@ fn draw_help_popup(f: &mut Frame) {
     let keys: [(&str, &str); 10] = [
         ("q / Esc", "quit (or close this popup)"),
         ("?", "toggle this help"),
-        ("m", "command menu (everything the UPS supports)"),
+        ("m", "menu: commands & settable variables"),
         ("t / d / s", "quick test · deep test · stop test"),
         ("b", "toggle beeper on/off"),
         ("↑ ↓ / k j", "scroll variables / menu"),
@@ -110,7 +113,7 @@ fn draw_help_popup(f: &mut Frame) {
 }
 
 fn draw_menu_popup(f: &mut Frame, app: &mut App) {
-    if app.cmds.is_empty() {
+    if app.menu_len() == 0 {
         let rect = popup_area(f, 56, 3);
         f.render_widget(
             Paragraph::new("command list not loaded yet (server unreachable?)")
@@ -120,7 +123,7 @@ fn draw_menu_popup(f: &mut Frame, app: &mut App) {
         );
         return;
     }
-    let items: Vec<ListItem> = app
+    let mut items: Vec<ListItem> = app
         .cmds
         .iter()
         .map(|(name, desc)| {
@@ -135,13 +138,44 @@ fn draw_menu_popup(f: &mut Frame, app: &mut App) {
             ]))
         })
         .collect();
-    let rect = popup_area(f, 78, app.cmds.len() as u16 + 2);
+    // Writable variables follow the commands; Enter opens the value editor.
+    items.extend(app.rw.iter().map(|name| {
+        ListItem::new(Line::from(vec![
+            Span::styled(format!(" set {name:<24}"), Style::new().fg(Color::Yellow)),
+            Span::styled(format!("current {} · Enter to edit", app.s(name)), gray()),
+        ]))
+    }));
+    let rect = popup_area(f, 78, app.menu_len() as u16 + 2);
     let list = List::new(items)
-        .block(
-            Block::bordered().title(" Commands — Enter runs · red needs y/N confirm · Esc closes "),
-        )
+        .block(Block::bordered().title(
+            " Commands & settings — Enter runs or edits · red needs y/N confirm · Esc closes ",
+        ))
         .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, rect, &mut app.menu_state);
+}
+
+fn draw_setvar_popup(f: &mut Frame, app: &App, name: &str, buffer: &str) {
+    let rect = popup_area(f, 46, 6);
+    let lines = vec![
+        Line::from(Span::styled(
+            name.to_string(),
+            Style::new().fg(Color::Yellow).bold(),
+        )),
+        Line::from(format!("current: {}", app.s(name))),
+        Line::from(vec![
+            Span::raw("new: "),
+            Span::styled(format!("{buffer}_"), Style::new().fg(Color::Cyan).bold()),
+        ]),
+        Line::from(Span::styled("digits · Enter apply · Esc cancel", gray())),
+    ];
+    f.render_widget(
+        Paragraph::new(lines).alignment(Alignment::Center).block(
+            Block::bordered()
+                .border_style(Style::new().fg(Color::Yellow))
+                .title(" Set variable "),
+        ),
+        rect,
+    );
 }
 
 fn draw_confirm_popup(f: &mut Frame, cmd: &str) {
