@@ -350,12 +350,11 @@ fn run(
 ) -> Result<()> {
     let send_cmd = |app: &mut App, cmd: &str| {
         let cmd = if cmd == "beeper" {
-            if app.s("ups.beeper.status") == "enabled" {
-                "beeper.disable"
-            } else {
-                "beeper.enable"
-            }
+            app.beeper_toggle_cmd()
         } else {
+            // Menu-dispatched commands with a known effect (beeper.*) must
+            // feed the overlay too, or a later `b` press resolves stale.
+            app.record_cmd_intent(cmd);
             cmd
         };
         app.note(format!("→ {cmd}"));
@@ -409,8 +408,10 @@ fn run(
                                 }
                             }
                             Some(MenuAction::Set(name)) => {
-                                // Prefill with the current value for editing.
-                                let buffer = app.vars.get(&name).cloned().unwrap_or_default();
+                                // Prefill with the current value (preferring
+                                // an in-flight write) for editing.
+                                let buffer =
+                                    app.current_val(&name).map(|(v, _)| v).unwrap_or_default();
                                 app.mode = Mode::SetVar { name, buffer };
                             }
                             None => {}
@@ -436,6 +437,7 @@ fn run(
                                     app.note("empty value — Esc to cancel");
                                 } else {
                                     app.note(format!("→ SET {name}={buffer}"));
+                                    app.pending_set(name.clone(), buffer.clone());
                                     let _ = cmd_tx.send(WorkerCmd::Set {
                                         name,
                                         value: buffer,

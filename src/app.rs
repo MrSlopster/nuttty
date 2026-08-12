@@ -1,6 +1,6 @@
 //! Application state: latest UPS variables, time-series history, log, UI state.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::Instant;
 
 use ratatui::layout::Rect;
@@ -53,6 +53,29 @@ pub fn is_dangerous(cmd: &str) -> bool {
     cmd.starts_with("shutdown") || cmd.starts_with("load.off") || cmd == "driver.killpower"
 }
 
+/// The ups.beeper.status value a beeper command is expected to produce.
+fn beeper_intent(cmd: &str) -> Option<&'static str> {
+    match cmd {
+        "beeper.enable" | "beeper.on" => Some("enabled"),
+        "beeper.disable" | "beeper.off" => Some("disabled"),
+        "beeper.mute" => Some("muted"),
+        _ => None,
+    }
+}
+
+/// Value comparison for confirming in-flight writes: exact match, or
+/// numeric equality so driver reformatting ("1.5" → "1.50") still confirms.
+fn values_match(device: &str, expected: &str) -> bool {
+    let (d, e) = (device.trim(), expected.trim());
+    if d == e {
+        return true;
+    }
+    match (d.parse::<f64>(), e.parse::<f64>()) {
+        (Ok(a), Ok(b)) => (a - b).abs() < 1e-9,
+        _ => false,
+    }
+}
+
 pub struct App {
     pub ups: String,
     pub host: String,
@@ -76,6 +99,12 @@ pub struct App {
     pub menu_state: ListState,
     /// Basic mode: only the summary panel, no charts or variable table.
     pub basic: bool,
+    /// In-flight writes: variable name → (expected value, when sent).
+    /// Some firmwares (CyberPower) refresh status vars only every ~12 s, so
+    /// decisions and display would otherwise run against stale state — e.g.
+    /// consecutive beeper toggles repeating the same command, or the value
+    /// editor prefilling a just-changed variable with its old value.
+    pending: HashMap<String, (String, f64)>,
 }
 
 impl App {
@@ -99,6 +128,7 @@ impl App {
             rw: Vec::new(),
             menu_state: ListState::default(),
             basic: false,
+            pending: HashMap::new(),
         }
     }
 
@@ -128,6 +158,7 @@ impl App {
                         self.table_state.select(self.vars.len().checked_sub(1));
                     }
                 }
+                self.sweep_pending();
             }
             Update::Cmds(c) => {
                 self.cmds = c;
@@ -148,8 +179,33 @@ impl App {
                     self.note(msg);
                 }
                 self.last_error = Some(e);
+                // The timeout must advance during outages too, not only on
+                // successful polls.
+                self.sweep_pending();
             }
-            Update::CmdResult { cmd, result } => self.note(format!("{cmd} → {result}")),
+            Update::CmdResult { cmd, result } => {
+                // A failed command invalidates the optimistic state — but
+                // only if the stored intent is still *this* command's; a
+                // newer superseding write must survive an older failure.
+                if result.starts_with("ERR") {
+                    if let Some(intent) = beeper_intent(&cmd) {
+                        if self
+                            .pending
+                            .get("ups.beeper.status")
+                            .is_some_and(|(v, _)| v == intent)
+                        {
+                            self.pending.remove("ups.beeper.status");
+                        }
+                    } else if let Some(rest) = cmd.strip_prefix("SET ") {
+                        if let Some((name, val)) = rest.split_once('=') {
+                            if self.pending.get(name).is_some_and(|(v, _)| v == val) {
+                                self.pending.remove(name);
+                            }
+                        }
+                    }
+                }
+                self.note(format!("{cmd} → {result}"));
+            }
         }
     }
 
@@ -211,6 +267,58 @@ impl App {
         let cur = self.menu_state.selected().unwrap_or(0) as i64;
         let next = cur.saturating_add(delta).clamp(0, len as i64 - 1) as usize;
         self.menu_state.select(Some(next));
+    }
+
+    /// Record an in-flight write so decisions and display can use the
+    /// expected value until the device confirms it.
+    pub fn pending_set(&mut self, name: String, expected: String) {
+        let t = self.now();
+        self.pending.insert(name, (expected, t));
+    }
+
+    /// Record the expected effect of an instant command (menu-dispatched
+    /// beeper commands must feed the overlay just like the `b` toggle).
+    pub fn record_cmd_intent(&mut self, cmd: &str) {
+        if let Some(intent) = beeper_intent(cmd) {
+            self.pending_set("ups.beeper.status".into(), intent.into());
+        }
+    }
+
+    /// Current value of a variable, preferring an in-flight write.
+    /// The bool is true while the value is pending device confirmation.
+    pub fn current_val(&self, name: &str) -> Option<(String, bool)> {
+        if let Some((v, _)) = self.pending.get(name) {
+            return Some((v.clone(), true));
+        }
+        // Trim: some firmwares pad string values with trailing whitespace.
+        self.vars.get(name).map(|v| (v.trim().to_string(), false))
+    }
+
+    /// Drop in-flight writes once the device confirms them, or give up
+    /// after 30 s if it never does.
+    fn sweep_pending(&mut self) {
+        let now = self.now();
+        let vars = &self.vars;
+        self.pending.retain(|name, (expected, t0)| {
+            let confirmed = vars.get(name).is_some_and(|v| values_match(v, expected));
+            !confirmed && now - *t0 <= 30.0
+        });
+    }
+
+    /// Resolve the beeper toggle against the pending optimistic state if a
+    /// toggle is still in flight, else against the device-reported status.
+    pub fn beeper_toggle_cmd(&mut self) -> &'static str {
+        let current = self
+            .current_val("ups.beeper.status")
+            .map(|(v, _)| v)
+            .unwrap_or_default();
+        let (cmd, next) = if current.trim() == "enabled" {
+            ("beeper.disable", "disabled")
+        } else {
+            ("beeper.enable", "enabled")
+        };
+        self.pending_set("ups.beeper.status".into(), next.into());
+        cmd
     }
 
     pub fn selected_action(&self) -> Option<MenuAction> {
@@ -404,6 +512,167 @@ mod tests {
         assert_eq!(app.table_state.selected(), Some(0));
         app.scroll(-1); // already at top: stays clamped
         assert_eq!(app.table_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn pending_overlay_lifecycle() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.vars.insert("input.transfer.low".into(), "160".into());
+        assert_eq!(
+            app.current_val("input.transfer.low"),
+            Some(("160".into(), false))
+        );
+        // Dispatching a SET overlays the expected value, marked pending.
+        app.pending_set("input.transfer.low".into(), "155".into());
+        assert_eq!(
+            app.current_val("input.transfer.low"),
+            Some(("155".into(), true))
+        );
+        // A poll still reporting the stale value keeps the overlay...
+        let mut v = BTreeMap::new();
+        v.insert("input.transfer.low".to_string(), "160".to_string());
+        app.apply(Update::Vars(v));
+        assert_eq!(
+            app.current_val("input.transfer.low"),
+            Some(("155".into(), true))
+        );
+        // ...and a poll confirming it clears the overlay.
+        let mut v = BTreeMap::new();
+        v.insert("input.transfer.low".to_string(), "155".to_string());
+        app.apply(Update::Vars(v));
+        assert_eq!(
+            app.current_val("input.transfer.low"),
+            Some(("155".into(), false))
+        );
+    }
+
+    #[test]
+    fn pending_overlay_cleared_on_set_error() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.vars.insert("input.transfer.low".into(), "160".into());
+        app.pending_set("input.transfer.low".into(), "155".into());
+        app.apply(Update::CmdResult {
+            cmd: "SET input.transfer.low=155".into(),
+            result: "ERR ACCESS-DENIED".into(),
+        });
+        // Failed SET: fall back to the device-reported value.
+        assert_eq!(
+            app.current_val("input.transfer.low"),
+            Some(("160".into(), false))
+        );
+    }
+
+    // No separate Vars-arm timeout test: the timeout logic is covered by
+    // pending_times_out_during_outage, and the Vars-arm sweep call site is
+    // covered by the confirmation-clearing tests above and below.
+
+    #[test]
+    fn superseding_write_survives_older_error() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.vars
+            .insert("ups.beeper.status".into(), "enabled".into());
+        app.beeper_toggle_cmd(); // → beeper.disable, pending "disabled"
+        app.beeper_toggle_cmd(); // → beeper.enable, pending "enabled"
+                                 // The *older* command fails after the newer one was dispatched:
+                                 // the newer optimistic state must survive.
+        app.apply(Update::CmdResult {
+            cmd: "beeper.disable".into(),
+            result: "ERR DRIVER-NOT-CONNECTED".into(),
+        });
+        assert_eq!(
+            app.current_val("ups.beeper.status"),
+            Some(("enabled".into(), true))
+        );
+    }
+
+    #[test]
+    fn menu_beeper_command_feeds_overlay() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.vars
+            .insert("ups.beeper.status".into(), "enabled".into());
+        // Explicit menu command, not the `b` toggle.
+        app.record_cmd_intent("beeper.disable");
+        assert_eq!(
+            app.current_val("ups.beeper.status"),
+            Some(("disabled".into(), true))
+        );
+        // A `b` press right after must resolve against the intent, not the
+        // stale device state — enable, not a repeated disable.
+        assert_eq!(app.beeper_toggle_cmd(), "beeper.enable");
+        // Commands without a known effect record nothing.
+        let mut app2 = App::new("ups".into(), "localhost".into(), 3493);
+        app2.record_cmd_intent("test.battery.start.quick");
+        assert!(app2.pending.is_empty());
+    }
+
+    #[test]
+    fn confirmation_accepts_numeric_reformatting() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.pending_set("input.transfer.low".into(), "1.5".into());
+        // Driver reports the value normalized: still a confirmation.
+        let mut v = BTreeMap::new();
+        v.insert("input.transfer.low".to_string(), "1.50".to_string());
+        app.apply(Update::Vars(v));
+        assert_eq!(
+            app.current_val("input.transfer.low"),
+            Some(("1.50".into(), false))
+        );
+    }
+
+    #[test]
+    fn pending_times_out_during_outage() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.pending
+            .insert("input.transfer.low".into(), ("155".into(), -40.0));
+        // No successful poll — only a connection error — yet the stale
+        // pending entry must still expire.
+        app.apply(Update::Error("connect refused".into()));
+        assert!(app.pending.is_empty());
+    }
+
+    #[test]
+    fn current_val_trims_padded_device_values() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.vars
+            .insert("ups.beeper.status".into(), "enabled ".into());
+        assert_eq!(
+            app.current_val("ups.beeper.status"),
+            Some(("enabled".into(), false))
+        );
+    }
+
+    #[test]
+    fn beeper_toggle_alternates_despite_stale_status() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        // Trailing space: this firmware pads some string values.
+        app.vars
+            .insert("ups.beeper.status".into(), "enabled ".into());
+        assert_eq!(app.beeper_toggle_cmd(), "beeper.disable");
+        // Device status is still stale "enabled"; consecutive toggles must
+        // alternate off the optimistic state, not repeat beeper.disable.
+        assert_eq!(app.beeper_toggle_cmd(), "beeper.enable");
+        assert_eq!(app.beeper_toggle_cmd(), "beeper.disable");
+        // A poll confirming the expected state clears the optimism...
+        let mut v = BTreeMap::new();
+        v.insert("ups.beeper.status".to_string(), "disabled".to_string());
+        app.apply(Update::Vars(v));
+        // ...and the next toggle resolves from the device again.
+        assert_eq!(app.beeper_toggle_cmd(), "beeper.enable");
+    }
+
+    #[test]
+    fn beeper_pending_cleared_on_command_error() {
+        let mut app = App::new("ups".into(), "localhost".into(), 3493);
+        app.vars
+            .insert("ups.beeper.status".into(), "enabled".into());
+        assert_eq!(app.beeper_toggle_cmd(), "beeper.disable");
+        app.apply(Update::CmdResult {
+            cmd: "beeper.disable".into(),
+            result: "ERR ACCESS-DENIED".into(),
+        });
+        // The command failed, so the device state is unchanged: resolve from
+        // the (still "enabled") reported status, not the failed intent.
+        assert_eq!(app.beeper_toggle_cmd(), "beeper.disable");
     }
 
     #[test]

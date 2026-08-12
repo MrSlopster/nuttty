@@ -90,7 +90,10 @@ Quirk to expect from real devices: some firmwares (CyberPower-platform OEMs)
 refresh status variables only every driver `pollfreq` (~12 s), so a command's
 effect (e.g. beeper status) shows up one poll cycle later, and
 `ups.test.result` may reset to "No test initiated" instead of reporting a
-pass. Code and tests must tolerate this lag.
+pass. Code and tests must tolerate this lag. The same firmware can also
+silently DROP a beeper command sent within a few seconds of the previous
+one — the pending-write overlay's 30 s timeout is what reconciles the UI
+back to the device's actual state when that happens.
 
 ## Verifying the TUI
 
@@ -103,6 +106,11 @@ escape-stripped landmarks). Two traps:
 - Never send `\x1b` (Esc) immediately followed by another key: terminal
   input parsing coalesces them into an Alt-chord. Sleep between writes or
   close popups with `q`/`?` instead.
+- ratatui redraws **changed cells only**, so the output stream after an
+  update contains fragments (e.g. `disabled (pending…)` without the
+  unchanged `beeper` before it) and never re-emits what vanished. To assert
+  on full screen content, force a complete redraw first by resizing the pty
+  one column (SIGWINCH) and capture that frame.
 
 Landmark checks verify characters, not colors. If a report says an element
 "doesn't show", suspect color-vs-background collisions before layout bugs.

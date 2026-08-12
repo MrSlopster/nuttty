@@ -140,9 +140,11 @@ fn draw_menu_popup(f: &mut Frame, app: &mut App) {
         .collect();
     // Writable variables follow the commands; Enter opens the value editor.
     items.extend(app.rw.iter().map(|name| {
+        let (val, pending) = app.current_val(name).unwrap_or(("–".into(), false));
+        let suffix = if pending { " (pending…)" } else { "" };
         ListItem::new(Line::from(vec![
             Span::styled(format!(" set {name:<24}"), Style::new().fg(Color::Yellow)),
-            Span::styled(format!("current {} · Enter to edit", app.s(name)), gray()),
+            Span::styled(format!("current {val}{suffix} · Enter to edit"), gray()),
         ]))
     }));
     let rect = popup_area(f, 78, app.menu_len() as u16 + 2);
@@ -156,12 +158,14 @@ fn draw_menu_popup(f: &mut Frame, app: &mut App) {
 
 fn draw_setvar_popup(f: &mut Frame, app: &App, name: &str, buffer: &str) {
     let rect = popup_area(f, 46, 6);
+    let (val, pending) = app.current_val(name).unwrap_or(("–".into(), false));
+    let suffix = if pending { " (pending…)" } else { "" };
     let lines = vec![
         Line::from(Span::styled(
             name.to_string(),
             Style::new().fg(Color::Yellow).bold(),
         )),
-        Line::from(format!("current: {}", app.s(name))),
+        Line::from(format!("current: {val}{suffix}")),
         Line::from(vec![
             Span::raw("new: "),
             Span::styled(format!("{buffer}_"), Style::new().fg(Color::Cyan).bold()),
@@ -393,10 +397,14 @@ fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
         app.s("output.voltage"),
         app.s("output.frequency")
     );
+    let (beeper, beeper_pending) = app
+        .current_val("ups.beeper.status")
+        .unwrap_or(("–".into(), false));
     let misc = format!(
-        "temp {} °C · beeper {}",
+        "temp {} °C · beeper {}{}",
         app.s("ups.temperature"),
-        app.s("ups.beeper.status")
+        beeper,
+        if beeper_pending { " (pending…)" } else { "" }
     );
     let lines = vec![
         Line::from(status_spans),
