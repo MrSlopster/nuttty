@@ -11,7 +11,7 @@ depends=('gcc-libs')
 makedepends=('cargo')
 optdepends=('nut: monitor a locally connected UPS')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha512sums=('3c1d3d99c789c6960002aad3334a7c994bd6b746a64ab878014503257afa5029760d0f014a172f4aa42dfd1c4266b566e3efea4a54edf7a9f9131e3bbf9719b9')
+sha512sums=('086cf5c2e3f13d007789b0df3f327308770b6fc131610900e5c4b5041cbd8671a7025bf52280e241a2bf451f699ba1a6883ee1032de4db3103ad46f594825a65')
 options=(!debug !lto)
 
 prepare() {
