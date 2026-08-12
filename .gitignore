@@ -1,1 +1,8 @@
 /target
+
+# makepkg artifacts (PKGBUILD builds in-tree, pikeru-style)
+/pkg/
+/src/nuttty-*/
+/src/*.tar.gz
+/*.pkg.tar.zst
+/*.tar.gz

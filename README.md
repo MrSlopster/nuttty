@@ -13,6 +13,22 @@ for [Network UPS Tools](https://networkupstools.org/).
   menu of every instant command the UPS supports
 - A scrollable table of every variable the UPS exposes
 
+## Installation
+
+On Arch-based systems, build and install the package with `makepkg`:
+
+```
+git clone https://github.com/MrSlopster/nuttty.git
+cd nuttty
+makepkg -si
+```
+
+Anywhere else with a Rust toolchain:
+
+```
+cargo install --git https://github.com/MrSlopster/nuttty
+```
+
 ## Usage
 
 ```
