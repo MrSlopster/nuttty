@@ -1,7 +1,7 @@
 # Maintainer: MrSlopster <306584837+MrSlopster@users.noreply.github.com>
 
 pkgname=nuttty
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="A btm-inspired TUI dashboard for Network UPS Tools (NUT)"
 arch=('x86_64' 'aarch64')

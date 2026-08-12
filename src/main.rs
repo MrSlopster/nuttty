@@ -44,6 +44,7 @@ OPTIONS:
   --password PASS   NUT password (env NUTTTY_PASSWORD / NUT_PASSWORD;
                     prefer env or config: argv is visible in process lists)
   --interval MS     poll interval in milliseconds (default 2000)
+  -b, --basic       summary panel only, no charts or variable table
   --once            print all UPS variables and exit
   -h, --help        show this help
 
@@ -63,6 +64,7 @@ struct Config {
     pass: Option<String>,
     interval_ms: u64,
     once: bool,
+    basic: bool,
 }
 
 /// $XDG_CONFIG_HOME/nuttty/config.toml, falling back to ~/.config per the
@@ -158,6 +160,7 @@ fn parse_args() -> Result<Config> {
         pass: None,
         interval_ms: 2000,
         once: false,
+        basic: false,
     };
     // Precedence: command line > environment > config file > defaults.
     load_config_file(&mut cfg)?;
@@ -184,6 +187,7 @@ fn parse_args() -> Result<Config> {
                 std::process::exit(0);
             }
             "--once" => cfg.once = true,
+            "-b" | "--basic" => cfg.basic = true,
             "--user" => cfg.user = Some(args.next().context("--user needs a value")?),
             "--password" => cfg.pass = Some(args.next().context("--password needs a value")?),
             "--interval" => {
@@ -254,6 +258,7 @@ fn main() -> Result<()> {
     let _guard = TerminalGuard;
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let mut app = App::new(ups, cfg.host, cfg.port);
+    app.basic = cfg.basic;
     run(&mut terminal, &mut app, update_rx, cmd_tx)
 }
 
@@ -441,6 +446,7 @@ mod tests {
             pass: None,
             interval_ms: 2000,
             once: false,
+            basic: false,
         }
     }
 

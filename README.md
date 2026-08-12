@@ -34,6 +34,7 @@ cargo install --git https://github.com/MrSlopster/nuttty
 ```
 nuttty                        # first UPS on localhost:3493
 nuttty myups@nut-server:3493  # explicit UPS, host, and port
+nuttty -b                     # basic mode: summary panel only
 nuttty --once                 # dump all variables and exit
 ```
 

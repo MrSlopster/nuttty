@@ -32,21 +32,28 @@ fn gray() -> Style {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.buttons.clear();
-    let rows = Layout::vertical([
-        Constraint::Percentage(45),
-        Constraint::Min(15),
-        Constraint::Length(1),
-    ])
-    .split(f.area());
-    let charts =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
-    draw_battery_chart(f, app, charts[0]);
-    draw_voltage_chart(f, app, charts[1]);
-    let main =
-        Layout::horizontal([Constraint::Percentage(46), Constraint::Percentage(54)]).split(rows[1]);
-    draw_status(f, app, main[0]);
-    draw_vars(f, app, main[1]);
-    draw_footer(f, app, rows[2]);
+    if app.basic {
+        // Basic mode: just the summary panel and the footer.
+        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(f.area());
+        draw_status(f, app, rows[0]);
+        draw_footer(f, app, rows[1]);
+    } else {
+        let rows = Layout::vertical([
+            Constraint::Percentage(45),
+            Constraint::Min(15),
+            Constraint::Length(1),
+        ])
+        .split(f.area());
+        let charts = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[0]);
+        draw_battery_chart(f, app, charts[0]);
+        draw_voltage_chart(f, app, charts[1]);
+        let main = Layout::horizontal([Constraint::Percentage(46), Constraint::Percentage(54)])
+            .split(rows[1]);
+        draw_status(f, app, main[0]);
+        draw_vars(f, app, main[1]);
+        draw_footer(f, app, rows[2]);
+    }
     // Not a match on &app.mode: the Menu arm needs app mutably.
     if matches!(app.mode, Mode::Help) {
         draw_help_popup(f);

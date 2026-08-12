@@ -58,6 +58,8 @@ pub struct App {
     /// Instant commands supported by the device: (name, description).
     pub cmds: Vec<(String, String)>,
     pub menu_state: ListState,
+    /// Basic mode: only the summary panel, no charts or variable table.
+    pub basic: bool,
 }
 
 impl App {
@@ -79,6 +81,7 @@ impl App {
             mode: Mode::Normal,
             cmds: Vec::new(),
             menu_state: ListState::default(),
+            basic: false,
         }
     }
 

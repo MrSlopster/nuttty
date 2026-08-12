@@ -52,6 +52,21 @@ command also triggers an immediate re-poll.
   `driver.killpower`) must stay behind the y/N `Confirm` mode and be
   rendered red in the menu (`app::is_dangerous`).
 
+## Release process
+
+The version lives in three places — the git tag, `Cargo.toml`, and
+`PKGBUILD` — and they must stay in sync. To release vX.Y.Z:
+
+1. Bump `version` in `Cargo.toml`, then run `cargo build` so `Cargo.lock`
+   follows.
+2. Set `pkgver=X.Y.Z` in `PKGBUILD` and reset `pkgrel=1`.
+3. Commit, create an annotated tag `vX.Y.Z`, push with `--follow-tags`.
+4. The `sha512sums` in PKGBUILD hashes the tag's GitHub tarball, which only
+   exists after step 3 (and can't hash itself, so the tagged PKGBUILD always
+   lags one release). After pushing the tag: regenerate with `makepkg -g`,
+   verify with `makepkg --verifysource`, then commit and push the checksum
+   update to master — that's the PKGBUILD users clone.
+
 ## Testing against real hardware
 
 Development often happens on a machine with a live UPS on `localhost:3493`.
