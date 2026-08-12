@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v1.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build static binary
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Check the binary is static
+        run: |
+          file "target/$TARGET/release/nuttty"
+          ldd "target/$TARGET/release/nuttty" 2>&1 | grep -Eq 'not a dynamic executable|statically linked'
+      - name: Package
+        run: |
+          tag='${{ steps.tag.outputs.tag }}'
+          asset="nuttty-${tag}-linux-x86_64"
+          cp "target/$TARGET/release/nuttty" "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag='${{ steps.tag.outputs.tag }}'
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --title "nuttty $tag" --generate-notes
+          gh release upload "$tag" "nuttty-${tag}-linux-x86_64" "nuttty-${tag}-linux-x86_64.sha256" --clobber

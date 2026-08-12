@@ -29,6 +29,9 @@ Anywhere else with a Rust toolchain:
 cargo install --git https://github.com/MrSlopster/nuttty
 ```
 
+Static linux-x86_64 binaries are also published on the
+[releases page](https://github.com/MrSlopster/nuttty/releases).
+
 ## Usage
 
 ```
