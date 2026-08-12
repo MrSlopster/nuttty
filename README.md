@@ -3,6 +3,8 @@
 A [bottom](https://github.com/ClementTsang/bottom)-inspired terminal dashboard
 for [Network UPS Tools](https://networkupstools.org/).
 
+![nuttty monitoring a 1500VA UPS](assets/screenshot.png)
+
 - Battery charge graph with the shutdown-cutoff line
 - Input/output voltage graph with the transfer window in the title
 - Runtime prediction from the UPS and from the observed charge trend
