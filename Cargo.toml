@@ -9,6 +9,32 @@ description = "A btm-inspired TUI dashboard for Network UPS Tools (NUT)"
 ratatui = "0.29"
 anyhow = "1"
 
+# cargo-deb: universal .deb from the static musl binary — no depends at all.
+[package.metadata.deb]
+maintainer = "MrSlopster <306584837+MrSlopster@users.noreply.github.com>"
+copyright = "2026, nuttty contributors"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+A btm-inspired terminal dashboard for Network UPS Tools: battery and \
+voltage graphs, runtime prediction, self-tests, and a menu of every \
+instant command the UPS supports."""
+depends = ""
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/nuttty", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/nuttty/README.md", "644"],
+]
+
+# cargo-generate-rpm: universal .rpm from the same static binary.
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/nuttty", dest = "/usr/bin/nuttty", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/nuttty/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/nuttty/LICENSE", mode = "644", doc = true },
+]
+auto-req = "no"
+
 [profile.release]
 strip = true
 lto = true

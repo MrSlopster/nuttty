@@ -30,14 +30,30 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools rpm
       - name: Build static binary
         run: cargo build --release --locked --target "$TARGET"
       - name: Check the binary is static
         run: |
           file "target/$TARGET/release/nuttty"
           ldd "target/$TARGET/release/nuttty" 2>&1 | grep -Eq 'not a dynamic executable|statically linked'
-      - name: Package
+      - name: Install packaging tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb,cargo-generate-rpm
+      - name: Build .deb and .rpm
+        # gzip rpm payload: zstd payloads are unreadable for pre-RHEL8 rpm.
+        run: |
+          cargo deb --target "$TARGET" --no-build --no-strip
+          cargo generate-rpm --target "$TARGET" --payload-compress gzip
+      - name: Inspect packages
+        run: |
+          dpkg-deb --info target/$TARGET/debian/*.deb
+          dpkg-deb --contents target/$TARGET/debian/*.deb
+          test -z "$(dpkg-deb --field target/$TARGET/debian/*.deb Depends)"
+          rpm -qpi target/$TARGET/generate-rpm/*.rpm
+          rpm -qp --requires target/$TARGET/generate-rpm/*.rpm
+      - name: Package binary
         run: |
           tag='${{ steps.tag.outputs.tag }}'
           asset="nuttty-${tag}-linux-x86_64"
@@ -50,4 +66,8 @@ jobs:
           tag='${{ steps.tag.outputs.tag }}'
           gh release view "$tag" >/dev/null 2>&1 \
             || gh release create "$tag" --title "nuttty $tag" --generate-notes
-          gh release upload "$tag" "nuttty-${tag}-linux-x86_64" "nuttty-${tag}-linux-x86_64.sha256" --clobber
+          gh release upload "$tag" --clobber \
+            "nuttty-${tag}-linux-x86_64" \
+            "nuttty-${tag}-linux-x86_64.sha256" \
+            target/$TARGET/debian/*.deb \
+            target/$TARGET/generate-rpm/*.rpm

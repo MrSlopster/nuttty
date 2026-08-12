@@ -61,10 +61,12 @@ The version lives in three places — the git tag, `Cargo.toml`, and
    follows.
 2. Set `pkgver=X.Y.Z` in `PKGBUILD` and reset `pkgrel=1`.
 3. Commit, create an annotated tag `vX.Y.Z`, push with `--follow-tags`.
-   The Release workflow then builds a static musl linux-x86_64 binary and
-   publishes it as a GitHub Release asset. For an already-pushed tag, run
-   the workflow manually from the Actions tab (workflow_dispatch with the
-   tag name).
+   The Release workflow then builds a static musl linux-x86_64 binary,
+   packages it as dependency-free .deb and .rpm (cargo-deb and
+   cargo-generate-rpm, configured in Cargo.toml metadata; rpm payload is
+   gzip so pre-RHEL8 rpm can read it), and publishes everything as GitHub
+   Release assets. For an already-pushed tag, run the workflow manually
+   from the Actions tab (workflow_dispatch with the tag name).
 4. The `sha512sums` in PKGBUILD hashes the tag's GitHub tarball, which only
    exists after step 3 (and can't hash itself, so the tagged PKGBUILD always
    lags one release). After pushing the tag: regenerate with `makepkg -g`,
